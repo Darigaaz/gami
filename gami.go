@@ -78,7 +78,10 @@ import (
 
 const responseChanGamiID = "gamigeneral"
 
-var errNotEvent = errors.New("Not Event")
+var (
+	errNotEvent    = errors.New("Not Event")
+	errNotResponse = errors.New("Not Response")
+)
 
 // Raise when not response expected protocol AMI
 var ErrNotAMI = errors.New("Server not AMI interface")
@@ -132,21 +135,6 @@ type AMIEvent struct {
 
 	// Params  of arguments received
 	Params map[string]string
-}
-
-func UseTLS(c *AMIClient) {
-	c.useTLS = true
-}
-
-func UseTLSConfig(config *tls.Config) func(*AMIClient) {
-	return func(c *AMIClient) {
-		c.tlsConfig = config
-		c.useTLS = true
-	}
-}
-
-func UnsecureTLS(c *AMIClient) {
-	c.unsecureTLS = true
 }
 
 // Login authenticate to AMI
@@ -280,7 +268,7 @@ func (client *AMIClient) notifyResponse(response *AMIResponse) {
 //newResponse build a response for action
 func newResponse(data *textproto.MIMEHeader) (*AMIResponse, error) {
 	if data.Get("Response") == "" {
-		return nil, errors.New("Not Response")
+		return nil, errNotResponse
 	}
 	response := &AMIResponse{"", "", make(map[string]string)}
 	for k, v := range *data {
@@ -359,4 +347,37 @@ func (client *AMIClient) NewConn() (err error) {
 	}
 
 	return nil
+}
+
+func NewConn(in io.ReadWriteCloser, options ...func(*AMIClient)) (*AMIClient, error) {
+	client := &AMIClient{
+		address:           "",
+		amiUser:           "",
+		amiPass:           "",
+		mutexAsyncAction:  new(sync.RWMutex),
+		waitNewConnection: make(chan struct{}),
+		response:          make(map[string]chan *AMIResponse),
+		Events:            make(chan *AMIEvent, 100),
+		Error:             make(chan error, 1),
+		NetError:          make(chan error, 1),
+		useTLS:            false,
+		unsecureTLS:       false,
+		tlsConfig:         new(tls.Config),
+	}
+	for _, op := range options {
+		op(client)
+	}
+	//	err := client.NewConn()
+	client.connRaw = in
+	client.conn = textproto.NewConn(client.connRaw)
+	label, err := client.conn.ReadLine()
+	if err != nil {
+		return nil, err
+	}
+
+	if strings.Contains(label, "Asterisk Call Manager") != true {
+		return nil, ErrNotAMI
+	}
+
+	return client, nil
 }
